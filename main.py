@@ -33,7 +33,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CSV_FILE_PATH = os.path.join(SCRIPT_DIR, 'data.csv')
 
 
-VERSION = "1.0.0"  
+VERSION = "2.0.0"  
 GITHUB_REPO = "v019-exe/PlanaCSV"  
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASE_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
@@ -172,11 +172,8 @@ class AnalizadorCsv(tk.Tk):
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
         self.title(f"Analizador de llamadas Plana v{VERSION}")
-        self.geometry("550x350")
-        try:
-            self.iconbitmap(os.path.join(SCRIPT_DIR, 'Plana.ico'))
-        except tk.TclError:
-            print("Advertencia: No se pudo cargar el icono 'Plana.ico'.")
+        self.geometry("500x500")
+        self.iconbitmap(os.path.join(SCRIPT_DIR, 'Plana.ico'))
         
         
         self.csv_path_var = tk.StringVar(value=default_csv_path)
