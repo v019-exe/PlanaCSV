@@ -33,7 +33,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CSV_FILE_PATH = os.path.join(SCRIPT_DIR, 'data.csv')
 
 
-VERSION = "2.0.0"  
+VERSION = "1.0.1"  
 GITHUB_REPO = "v019-exe/PlanaCSV"  
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASE_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
