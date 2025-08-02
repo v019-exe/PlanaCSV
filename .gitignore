@@ -21,3 +21,9 @@ ENV/
 data.csv
 *.exe
 !Plana.exe
+
+main.dist/
+main.onefile-build/
+main.build
+
+PlanaCSV-Nuitka.exe
