@@ -28,7 +28,7 @@ RANGOS_HORARIOS = {
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CSV_FILE_PATH = os.path.join(SCRIPT_DIR, 'data.csv')
 
-VERSION = "3.0.0"
+VERSION = "4.0.0"
 GITHUB_REPO = "v019-exe/PlanaCSV"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASE_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
@@ -393,12 +393,245 @@ def actualizar_excel_existente(conteos_perdidas, fechas_objetivo, archivo_excel,
         
     return False, "Error desconocido"
 
+def contar_llamadas_por_agente_hora_y_dia(fechas_objetivo, ruta_csv):
+    import csv
+    from datetime import datetime
+    from collections import defaultdict
+    
+    try:
+        conteos = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
+        with open(ruta_csv, 'r', encoding='utf-8') as csvfile:
+            reader = csv.DictReader(csvfile, delimiter=';')
+            
+            for row in reader:
+                agente = row.get('Agente', '').strip()
+                fecha_raw = row.get('Fecha de inicio de la llamada', '').strip()
+                hora_raw = row.get('Hora de inicio de la llamada', '').strip()
+
+                if not fecha_raw or not hora_raw or not agente or agente.lower() == 'undefined':
+                    continue
+
+                try:
+                    fecha_iso = fecha_raw.split(' ')[0]
+                    fecha_formateada = datetime.strptime(fecha_iso, '%Y-%m-%d').strftime('%d/%m/%Y')
+                    
+                    if fecha_formateada not in fechas_objetivo:
+                        continue
+                    
+                    hora = int(hora_raw[:2])
+                    
+                    if 8 <= hora <= 22:
+                        conteos[agente][fecha_formateada][hora] += 1
+                        
+                except (ValueError, IndexError):
+                    continue
+        
+        for agente, fechas in list(conteos.items())[:3]:
+            for fecha, horas in list(fechas.items())[:2]:
+                total_dia = sum(horas.values())
+                horas_con_llamadas = len([h for h in horas.values() if h > 0])
+        
+        return dict(conteos)
+        
+    except FileNotFoundError:
+        return None
+    except Exception as e:
+        return None
+
+def actualizar_agentes_excel_horas(fechas_objetivo, archivo_excel, año, mes, ruta_csv):
+    from openpyxl import load_workbook
+    
+    if not isinstance(ruta_csv, str):
+        return False, f"Error: ruta_csv debe ser string, recibido {type(ruta_csv)}: {ruta_csv}"
+    
+    if not isinstance(fechas_objetivo, (list, tuple, set)):
+        return False, f"Error: fechas_objetivo debe ser lista/tupla/set, recibido {type(fechas_objetivo)}: {fechas_objetivo}"
+    
+    try:
+        conteos_por_hora = contar_llamadas_por_agente_hora_y_dia(fechas_objetivo, ruta_csv)
+        if conteos_por_hora is None:
+            return False, "Error al procesar datos del CSV"
+        
+        wb = load_workbook(archivo_excel)
+        nombre_hoja = None
+        año_corto = str(año)[-2:]
+        meses_nombres = {
+            1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
+            5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
+            9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
+        }
+        mes_nombre = meses_nombres.get(mes, "")
+        
+        palabras_extendidas = [
+            'HORAS EXTENDIDAS', 'HORAS EXTEN', 'EXTENDIDAS', 'EXTEN',
+            'HORAS EXT', 'H EXTENDIDAS', 'H EXTEN', 'H EXT',
+            'EXTENDED', 'EXT HOURS', 'EXTENDED HOURS'
+        ]
+        
+        def es_hoja_extendida(nombre_hoja):
+            nombre_upper = nombre_hoja.upper()
+            return any(palabra in nombre_upper for palabra in palabras_extendidas)
+        
+        hojas_candidatas = [sheet for sheet in wb.sheetnames if es_hoja_extendida(sheet)]
+        
+        if hojas_candidatas:
+            mes_nombre_upper = mes_nombre.upper() if mes_nombre else ""
+            for candidata in hojas_candidatas:
+                if f"{mes_nombre_upper} {año}" in candidata.upper():
+                    nombre_hoja = candidata
+                    break
+                elif f"{mes_nombre_upper} {año_corto}" in candidata.upper():
+                    nombre_hoja = candidata
+                    break
+            if not nombre_hoja:
+                nombre_hoja = hojas_candidatas[0]
+        
+        if not nombre_hoja:
+            hojas_disponibles = ", ".join(wb.sheetnames)
+            raise Exception(f"No se encontró hoja de horas extendidas para {mes}/{año}. Hojas: {hojas_disponibles}")
+        
+        ws = wb[nombre_hoja]
+
+        def normalizar_nombre(nombre):
+            import unicodedata
+            nombre_sin_tildes = unicodedata.normalize('NFD', nombre)
+            nombre_sin_tildes = ''.join(c for c in nombre_sin_tildes if unicodedata.category(c) != 'Mn')
+            return nombre_sin_tildes.lower().strip()
+
+        def extraer_nombre_del_csv(nombre_csv):
+            import re
+            match = re.search(r'\(([^)]+)\)', nombre_csv)
+            if match:
+                return match.group(1).strip()
+            return nombre_csv.strip()
+
+        def nombres_coinciden(nombre_csv, nombre_excel):
+            nombre_limpio_csv = extraer_nombre_del_csv(nombre_csv)
+            csv_norm = normalizar_nombre(nombre_limpio_csv)
+            excel_norm = normalizar_nombre(nombre_excel)
+            
+            if csv_norm == excel_norm:
+                return True
+            if csv_norm in excel_norm or excel_norm in csv_norm:
+                return True
+            
+            casos_especiales = {
+                'consuelo': ['consu', 'ext consu', 'ext. consu'],
+                'raul': ['raul', 'raúl'],
+                'eliana': ['eliana'],
+                'pilar': ['pilar'],
+                'victoria': ['victoria'],
+                'ayoub': ['ayoub']
+            }
+            
+            for nombre_base, variaciones in casos_especiales.items():
+                if csv_norm == nombre_base or any(var in csv_norm for var in variaciones):
+                    if any(var in excel_norm for var in variaciones) or nombre_base in excel_norm:
+                        return True
+            return False
+
+        mapeo_horas_filas = {}
+        for row in range(3, 18):
+            celda_hora = ws.cell(row=row, column=1).value
+            if celda_hora and isinstance(celda_hora, (int, str)):
+                try:
+                    hora = int(str(celda_hora).strip())
+                    if 8 <= hora <= 22:
+                        mapeo_horas_filas[hora] = row
+                except ValueError:
+                    continue
+
+        fechas_encontradas = {}
+        for col in range(1, ws.max_column + 1):
+            celda_fecha = ws.cell(row=1, column=col).value
+            if celda_fecha:
+                fecha_str = None
+                if hasattr(celda_fecha, 'strftime'):
+                    fecha_str = celda_fecha.strftime('%d/%m/%Y')
+                elif isinstance(celda_fecha, str) and '/' in celda_fecha:
+                    fecha_str = celda_fecha.strip()
+                
+                if fecha_str and fecha_str in fechas_objetivo:
+                    fechas_encontradas[fecha_str] = col
+
+
+        mapeo_agente_columna = {}
+        
+        for fecha, col_fecha in fechas_encontradas.items():
+
+            col_siguiente_fecha = ws.max_column + 1
+
+            for otras_fechas_col in fechas_encontradas.values():
+                if otras_fechas_col > col_fecha and otras_fechas_col < col_siguiente_fecha:
+                    col_siguiente_fecha = otras_fechas_col
+
+            for col in range(col_fecha, col_siguiente_fecha):
+                celda_agente = ws.cell(row=2, column=col).value
+                if celda_agente and isinstance(celda_agente, str):
+                    nombre_excel = celda_agente.strip()
+
+                    encabezados_excluir = [
+                        'LLAMADAS', 'RECIBIDAS', 'EXTENSIÓN', 'TOTAL', 'FRANJAS', 
+                        'HORARIAS', 'DIARIAS', 'ATENDIDAS', 'SUM(', 'HORA ATENCION'
+                    ]
+                    
+                    if (not any(enc in nombre_excel.upper() for enc in encabezados_excluir) and
+                        len(nombre_excel) > 2 and not nombre_excel.startswith('=')):
+
+                        for nombre_csv in conteos_por_hora.keys():
+                            if nombres_coinciden(nombre_csv, nombre_excel):
+                                clave = (nombre_csv, fecha)
+                                mapeo_agente_columna[clave] = col
+                                break
+
+        if not mapeo_agente_columna:
+            for col in range(1, min(20, ws.max_column + 1)):
+                valor = ws.cell(row=1, column=col).value
+
+            for col in range(1, min(20, ws.max_column + 1)):
+                valor = ws.cell(row=2, column=col).value
+            
+            return False, "No se pudieron mapear los agentes con las columnas"
+
+        celdas_actualizadas = 0
+        agentes_procesados = set()
+        
+        for (agente, fecha), col_agente in mapeo_agente_columna.items():
+            if agente in conteos_por_hora and fecha in conteos_por_hora[agente]:
+                agentes_procesados.add(agente)
+                datos_hora = conteos_por_hora[agente][fecha]
+                total_llamadas = sum(datos_hora.values())
+                
+                
+                for hora in range(8, 23):
+                    if hora in mapeo_horas_filas:
+                        fila_hora = mapeo_horas_filas[hora]
+                        llamadas_en_hora = datos_hora.get(hora, 0)
+
+                        if llamadas_en_hora > 0:
+                            ws.cell(row=fila_hora, column=col_agente, value=llamadas_en_hora)
+                        else:
+                            ws.cell(row=fila_hora, column=col_agente, value=None)
+                        celdas_actualizadas += 1
+
+                horas_con_llamadas = [(h, c) for h, c in datos_hora.items() if c > 0]
+
+
+        agentes_no_procesados = set(conteos_por_hora.keys()) - agentes_procesados
+
+
+        wb.save(archivo_excel)
+        return True, f"Datos actualizados con llamadas reales por hora en '{nombre_hoja}': {len(agentes_procesados)} agentes, {celdas_actualizadas} celdas"
+        
+    except FileNotFoundError:
+        raise Exception(f"No se encontró el archivo Excel: {archivo_excel}")
+    except Exception as e:
+        import traceback
+        raise Exception(f"Error al actualizar Excel: {str(e)}")
+    
+    return False, "Error desconocido"
 
 def actualizar_agentes_excel(conteos_agentes, fechas_objetivo, archivo_excel, año, mes):
-    """
-    Actualiza un archivo Excel existente con los datos de agentes
-    Busca dinámicamente los nombres de agentes en las filas y actualiza sus totales diarios
-    """
     from openpyxl import load_workbook
     
     try:
@@ -599,8 +832,8 @@ class AnalizadorCsv(tk.Tk):
         myappid = 'plana.analizador.llamadas.1'
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
-        self.title(f"Analizador de llamadas Plana v{VERSION}")
-        self.geometry("500x500")
+        self.title(f"PlanaCSV v{VERSION}")
+        self.geometry("500x600")
         self.iconbitmap(os.path.join(SCRIPT_DIR, 'Plana.ico'))
         
         self.csv_path_var = tk.StringVar(value=default_csv_path)
@@ -641,7 +874,7 @@ class AnalizadorCsv(tk.Tk):
         
         main_frame.grid_columnconfigure(1, weight=1)
         
-        titulo_label = ttk.Label(main_frame, text="Analizador de llamadas Plana", 
+        titulo_label = ttk.Label(main_frame, text="PlanaCSV", 
                                font=('Segoe UI', 14, 'bold'))
         titulo_label.grid(row=0, column=0, columnspan=3, pady=(0, 15), sticky="w")
         
@@ -711,10 +944,10 @@ class AnalizadorCsv(tk.Tk):
         status_frame = ttk.Frame(self)
         status_frame.pack(fill="x", side="bottom", padx=10, pady=5)
         
-        self.status_label = ttk.Label(status_frame, text=f"Analizador de llamadas Plana v{VERSION}", anchor="w")
+        self.status_label = ttk.Label(status_frame, text=f"PlanaCSV v{VERSION}", anchor="w")
         self.status_label.pack(side="left")
         
-        self.update_button = ttk.Button(status_frame, text="¡Nueva versión disponible!", 
+        self.update_button = ttk.Button(status_frame, text="Nueva versión disponible!", 
                                       command=self.mostrar_dialogo_actualizacion)
         
 
@@ -949,13 +1182,17 @@ class AnalizadorCsv(tk.Tk):
             resultado1, mensaje1 = actualizar_excel_existente(conteos_perdidas, dias_objetivo, excel_path, año, mes)
             
             resultado2, mensaje2 = actualizar_agentes_excel(conteos_agentes, dias_objetivo, excel_path, año, mes)
+
+            resultado3, mensaje3 = actualizar_agentes_excel_horas(dias_objetivo, excel_path, año, mes, csv_path)
             
-            if resultado1 and resultado2:
-                messagebox.showinfo("Éxito", f"Archivo Excel actualizado correctamente:\n{excel_path}\n\n{mensaje1}\n{mensaje2}")
+            if resultado1 and resultado2 and resultado3:
+                messagebox.showinfo("Éxito", f"Archivo Excel actualizado correctamente")
             elif resultado1:
                 messagebox.showwarning("Parcial", f"Solo se actualizaron las llamadas perdidas:\n{excel_path}\n\n{mensaje1}\n\nError en agentes: {mensaje2}")
             elif resultado2:
                 messagebox.showwarning("Parcial", f"Solo se actualizaron los agentes:\n{excel_path}\n\n{mensaje2}\n\nError en llamadas perdidas: {mensaje1}")
+            elif resultado3:
+                messagebox.showwarning("Parcial", f"Solo se actualizaron los agentes:\n{excel_path}\n\n{mensaje3}\n\nError en llamadas perdidas: {mensaje1}")
             else:
                 messagebox.showerror("Error", f"No se pudo actualizar el archivo Excel.\n{mensaje1}\n{mensaje2}")
         except Exception as e:
